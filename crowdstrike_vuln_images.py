@@ -1,6 +1,7 @@
 import requests
 import json
 import time
+import csv
 from typing import List, Dict, Optional
 
 class CrowdStrikeVulnAnalyzer:
@@ -49,32 +50,48 @@ class CrowdStrikeVulnAnalyzer:
         limit = 100  # API maximum
         batch_number = 0
         total_from_api = None
-        consecutive_errors = 0
-        max_consecutive_errors = 3
         
         print("="*60)
         print("FETCHING ALL VULNERABILITIES")
         print("="*60)
         
-        while consecutive_errors < max_consecutive_errors:
-            batch_number += 1
-            print(f"Batch {batch_number}: offset={offset}, limit={limit}")
-            
-            url = f"{self.base_url}/container-security/combined/vulnerabilities/v1"
-            params = {'limit': limit, 'offset': offset}
+        url = f"{self.base_url}/container-security/combined/vulnerabilities/v1"
+        
+        try:
+            # First try to get the total count
+            params = {'limit': 1, 'offset': 0}
             if additional_filters:
                 params['filter'] = additional_filters
             
-            try:
+            response = requests.get(url, headers=self._get_headers(), params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            meta = data.get('meta', {})
+            pagination = meta.get('pagination', {})
+            total_from_api = pagination.get('total', 0)
+            
+            if total_from_api == 0:
+                print("No vulnerabilities found in the system")
+                return []
+            
+            print(f"🎯 Total vulnerabilities available: {total_from_api:,}")
+            
+            # Now fetch all vulnerabilities
+            while True:
+                batch_number += 1
+                print(f"Batch {batch_number}: offset={offset}, limit={limit}")
+                
+                params = {'limit': limit, 'offset': offset}
+                if additional_filters:
+                    params['filter'] = additional_filters
+                
                 response = requests.get(url, headers=self._get_headers(), params=params)
                 
+                # Handle different response codes
                 if response.status_code == 500:
-                    print("❌ Server Error 500 - likely reached end of data")
-                    consecutive_errors += 1
-                    if consecutive_errors >= max_consecutive_errors:
-                        break
-                    offset += limit
-                    time.sleep(1)
+                    print(f"⚠️ Server Error 500 for batch {batch_number} - retrying with smaller batch")
+                    limit = max(10, limit // 2)  # Reduce batch size but not smaller than 10
                     continue
                 
                 response.raise_for_status()
@@ -83,14 +100,6 @@ class CrowdStrikeVulnAnalyzer:
                 batch_resources = data.get('resources', [])
                 batch_size = len(batch_resources)
                 
-                consecutive_errors = 0  # Reset on success
-                
-                if total_from_api is None:
-                    meta = data.get('meta', {})
-                    pagination = meta.get('pagination', {})
-                    total_from_api = pagination.get('total', 0)
-                    print(f"🎯 Total vulnerabilities available: {total_from_api:,}")
-                
                 if batch_size == 0:
                     print("📭 Empty batch - reached end")
                     break
@@ -98,20 +107,17 @@ class CrowdStrikeVulnAnalyzer:
                 all_vulnerabilities.extend(batch_resources)
                 print(f"✅ Added {batch_size} vulnerabilities (total: {len(all_vulnerabilities):,})")
                 
-                if total_from_api and len(all_vulnerabilities) >= total_from_api:
+                if len(all_vulnerabilities) >= total_from_api:
                     print(f"🎉 Collected all {total_from_api:,} vulnerabilities!")
                     break
                 
-                offset += limit
-                time.sleep(0.1)
-                    
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Error in batch {batch_number}: {e}")
-                consecutive_errors += 1
-                if consecutive_errors >= max_consecutive_errors:
-                    break
-                offset += limit
-                time.sleep(1)
+                offset += batch_size  # Use actual batch size instead of limit
+                time.sleep(0.2)  # Slightly longer delay between batches
+                
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error fetching vulnerabilities: {e}")
+            if not all_vulnerabilities:
+                raise  # Only raise if we haven't collected any vulnerabilities
         
         print(f"✅ Fetching complete: {len(all_vulnerabilities):,} vulnerabilities collected")
         return all_vulnerabilities
@@ -219,6 +225,33 @@ class CrowdStrikeVulnAnalyzer:
             
         return results
 
+def convert_to_csv(results: List[Dict], timestamp: str) -> None:
+    """Convert results to CSV format"""
+    csv_filename = f'vulnerability_analysis_{timestamp}.csv'
+    
+    # Flatten the data structure for CSV
+    csv_rows = []
+    for vuln in results:
+        for image in vuln['impacted_images']:
+            row = {
+                'cve_id': vuln['cve_id'],
+                'severity': vuln['severity'],
+                'cvss_score': vuln['cvss_score'],
+                'published_date': vuln['published_date'],
+                'registry': image['registry'],
+                'repository': image['repository'],
+                'tag': image['tag']
+            }
+            csv_rows.append(row)
+    
+    # Write to CSV
+    if csv_rows:
+        with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=csv_rows[0].keys())
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        print(f"📝 CSV report saved to: {csv_filename}")
+
 def main():
     # Configuration
     BASE_URL = "https://api.crowdstrike.com"
@@ -226,6 +259,7 @@ def main():
     CLIENT_SECRET = "your_client_secret_here"
     
     try:
+        start_time = time.time()
         analyzer = CrowdStrikeVulnAnalyzer(BASE_URL, CLIENT_ID, CLIENT_SECRET)
         
         # Run analysis
@@ -235,21 +269,27 @@ def main():
             print("No results to display")
             return
         
-        # Save results
+        # Generate timestamp for filenames
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = f'vulnerability_analysis_{timestamp}.json'
         
-        with open(filename, 'w') as f:
+        # Save JSON results
+        json_filename = f'vulnerability_analysis_{timestamp}.json'
+        with open(json_filename, 'w') as f:
             json.dump(results, f, indent=2)
+        print(f"\n💾 JSON report saved to: {json_filename}")
         
-        print(f"\n💾 Results saved to: {filename}")
-        print(f"🔍 Total CVEs processed: {len(results):,}")
+        # Save CSV results
+        convert_to_csv(results, timestamp)
+        
+        # Calculate execution time
+        execution_time = time.time() - start_time
         
         # Display summary of findings
         total_images = sum(len(r['impacted_images']) for r in results)
         print(f"\n📊 Summary:")
         print(f"   - Total CVEs with impacted images: {len(results):,}")
         print(f"   - Total impacted images: {total_images:,}")
+        print(f"   - Execution time: {execution_time:.2f} seconds")
         
     except Exception as e:
         print(f"❌ Script failed: {e}")
