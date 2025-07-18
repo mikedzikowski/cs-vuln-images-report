@@ -3,7 +3,6 @@ Here's a visually enhanced README.md with added CSV information:
 ```markdown
 # 🛡️ CrowdStrike CVE Image Vulnerability Report
 
-<div align="center">
 
 ![CrowdStrike](https://img.shields.io/badge/CrowdStrike-API-red)
 ![Python](https://img.shields.io/badge/Python-3.6%2B-blue)
@@ -11,7 +10,6 @@ Here's a visually enhanced README.md with added CSV information:
 
 A powerful Python script that generates comprehensive reports of CVEs and their impacted container images using the CrowdStrike API.
 
-</div>
 
 ## 📋 Table of Contents
 - [Features](#-features)
