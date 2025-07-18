@@ -1,4 +1,3 @@
-Here's a visually enhanced README.md with added CSV information:
 
 ```markdown
 # 🛡️ CrowdStrike CVE Image Vulnerability Report
