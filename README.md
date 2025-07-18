@@ -161,4 +161,3 @@ This is not an official CrowdStrike tool. Use at your own risk.
 Made with ❤️ for the CrowdStrike community
 
 </div>
-```
