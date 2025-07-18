@@ -1,5 +1,4 @@
 
-```markdown
 # 🛡️ CrowdStrike CVE Image Vulnerability Report
 
 
